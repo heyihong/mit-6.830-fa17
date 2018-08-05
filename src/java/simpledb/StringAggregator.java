@@ -1,11 +1,28 @@
 package simpledb;
 
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.Map;
+import java.util.NoSuchElementException;
+
 /**
  * Knows how to compute some aggregate over a set of StringFields.
  */
 public class StringAggregator implements Aggregator {
 
     private static final long serialVersionUID = 1L;
+
+    private final int gbfield;
+
+    private final Type gbfieldtype;
+
+    private final int afield;
+
+    private final Op what;
+
+    private final Map<Field, Integer> countMap;
+
+    private final TupleDesc tupleDesc;
 
     /**
      * Aggregate constructor
@@ -17,7 +34,18 @@ public class StringAggregator implements Aggregator {
      */
 
     public StringAggregator(int gbfield, Type gbfieldtype, int afield, Op what) {
-        // some code goes here
+        if (what != Op.COUNT) {
+           throw new IllegalArgumentException("what != COUNT");
+        }
+        this.gbfield = gbfield;
+        this.gbfieldtype = gbfieldtype;
+        this.afield = afield;
+        this.what = what;
+        this.countMap = new HashMap<>();
+        Type[] types = gbfield == NO_GROUPING ?
+                new Type[]{Type.INT_TYPE} :
+                new Type[]{gbfieldtype, Type.INT_TYPE};
+        this.tupleDesc = new TupleDesc(types);
     }
 
     /**
@@ -25,7 +53,18 @@ public class StringAggregator implements Aggregator {
      * @param tup the Tuple containing an aggregate field and a group-by field
      */
     public void mergeTupleIntoGroup(Tuple tup) {
-        // some code goes here
+        Field key = gbfield == NO_GROUPING ? null : tup.getField(gbfield);
+        switch (what) {
+            case COUNT:
+                Integer count = countMap.get(key);
+                if (count == null) {
+                    count = 0;
+                }
+                countMap.put(key, count + 1);
+                break;
+            default:
+                throw new UnsupportedOperationException();
+        }
     }
 
     /**
@@ -37,8 +76,59 @@ public class StringAggregator implements Aggregator {
      *   aggregate specified in the constructor.
      */
     public OpIterator iterator() {
-        // some code goes here
-        throw new UnsupportedOperationException("please implement me for lab2");
+        return new OpIterator() {
+
+            private Iterator<Map.Entry<Field, Integer>> countIter = null;
+
+            @Override
+            public void open() throws DbException, TransactionAbortedException {
+                countIter = countMap.entrySet().iterator();
+            }
+
+            @Override
+            public boolean hasNext() throws DbException, TransactionAbortedException {
+                if (countIter == null) {
+                    throw new IllegalStateException();
+                }
+                return countIter.hasNext();
+            }
+
+            @Override
+            public Tuple next() throws DbException, TransactionAbortedException, NoSuchElementException {
+                if (!hasNext()) {
+                    throw new NoSuchElementException();
+                }
+                Map.Entry<Field, Integer> entry = countIter.next();
+                Field val = new IntField(entry.getValue());
+                Tuple t = new Tuple(getTupleDesc());
+                if (gbfield == NO_GROUPING) {
+                    t.setField(0, val);
+                    return t;
+                } else {
+                    t.setField(0, entry.getKey());
+                    t.setField(1, val);
+                    return t;
+                }
+            }
+
+            @Override
+            public void rewind() throws DbException, TransactionAbortedException {
+                if (countIter == null) {
+                    throw new IllegalStateException();
+                }
+                countIter = countMap.entrySet().iterator();
+            }
+
+            @Override
+            public TupleDesc getTupleDesc() {
+                return tupleDesc;
+            }
+
+            @Override
+            public void close() {
+                countIter = null;
+            }
+        };
     }
 
 }

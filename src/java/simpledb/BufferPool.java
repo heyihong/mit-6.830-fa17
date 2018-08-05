@@ -3,6 +3,7 @@ package simpledb;
 import java.io.*;
 
 import java.util.LinkedHashMap;
+import java.util.Map;
 
 /**
  * BufferPool manages the reading and writing of pages into memory from
@@ -54,6 +55,10 @@ public class BufferPool {
     	BufferPool.pageSize = DEFAULT_PAGE_SIZE;
     }
 
+    private static DbFile getDatabaseFile(int tableId) {
+        return Database.getCatalog().getDatabaseFile(tableId);
+    }
+
     /**
      * Retrieve the specified page with the associated permissions.
      * Will acquire a lock and may block if that lock is held by another
@@ -76,9 +81,9 @@ public class BufferPool {
             return page;
         }
         if (pages.size() == numPages) {
-            pages.remove(pages.entrySet().iterator().next().getKey());
+            evictPage();
         }
-        page = Database.getCatalog().getDatabaseFile(pid.getTableId()).readPage(pid);
+        page = getDatabaseFile(pid.getTableId()).readPage(pid);
         pages.put(pid, page);
         return page;
     }
@@ -144,8 +149,12 @@ public class BufferPool {
      */
     public void insertTuple(TransactionId tid, int tableId, Tuple t)
         throws DbException, IOException, TransactionAbortedException {
-        // some code goes here
-        // not necessary for lab1
+        // TODO acquire lock
+        DbFile dbFile = getDatabaseFile(tableId);
+        for (Page page : dbFile.insertTuple(tid, t)) {
+            page.markDirty(true, tid);
+            pages.put(page.getId(), page);
+        }
     }
 
     /**
@@ -163,8 +172,12 @@ public class BufferPool {
      */
     public  void deleteTuple(TransactionId tid, Tuple t)
         throws DbException, IOException, TransactionAbortedException {
-        // some code goes here
-        // not necessary for lab1
+        // TODO acquire lock
+        DbFile dbFile = getDatabaseFile(t.getRecordId().getPageId().getTableId());
+        for (Page page : dbFile.deleteTuple(tid, t)) {
+            page.markDirty(true, tid);
+            pages.put(page.getId(), page);
+        }
     }
 
     /**
@@ -173,9 +186,11 @@ public class BufferPool {
      *     break simpledb if running in NO STEAL mode.
      */
     public synchronized void flushAllPages() throws IOException {
-        // some code goes here
-        // not necessary for lab1
-
+        for (Map.Entry<PageId, Page> entry : pages.entrySet()) {
+            if (entry.getValue().isDirty() != null) {
+                flushPage(entry.getKey());
+            }
+        }
     }
 
     /** Remove the specific page id from the buffer pool.
@@ -195,9 +210,10 @@ public class BufferPool {
      * Flushes a certain page to disk
      * @param pid an ID indicating the page to flush
      */
-    private synchronized  void flushPage(PageId pid) throws IOException {
-        // some code goes here
-        // not necessary for lab1
+    private synchronized void flushPage(PageId pid) throws IOException {
+        Page page = pages.get(pid);
+        getDatabaseFile(pid.getTableId()).writePage(page);
+        page.markDirty(false, null);
     }
 
     /** Write all pages of the specified transaction to disk.
@@ -212,8 +228,13 @@ public class BufferPool {
      * Flushes the page to disk to ensure dirty pages are updated on disk.
      */
     private synchronized  void evictPage() throws DbException {
-        // some code goes here
-        // not necessary for lab1
+        PageId pid = pages.entrySet().iterator().next().getKey();
+        try {
+            flushPage(pid);
+        } catch (IOException ioe) {
+            throw new DbException(ioe.getMessage());
+        }
+        pages.remove(pid);
     }
 
 }

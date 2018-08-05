@@ -159,8 +159,9 @@ public class TupleDesc implements Serializable {
      */
     public int fieldNameToIndex(String name) throws NoSuchElementException {
         if (name != null) {
+            String fname = name.substring(name.lastIndexOf('.') + 1);
             for (int i = 0; i < numFields(); i++) {
-                if (name.equals(getFieldName(i))) {
+                if (fname.equals(getFieldName(i))) {
                     return i;
                 }
             }
