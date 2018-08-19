@@ -1,8 +1,8 @@
 package simpledb;
 
-import java.util.HashMap;
-import java.util.Iterator;
-import java.util.Map;
+import sun.plugin.dom.exception.InvalidStateException;
+
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -66,6 +66,26 @@ public class TableStats {
      */
     static final int NUM_HIST_BINS = 100;
 
+    private final Object[] histObjects;
+
+    private final TupleDesc td;
+
+    private final int ioCostPerPage;
+
+    private final int numPages;
+
+    private final int numTuples;
+
+    private static List<Integer> getIntTypeIdxs(TupleDesc td) {
+        List<Integer> idxs = new ArrayList<>();
+        for (int i = 0; i != td.numFields(); i++) {
+            if (td.getFieldType(i) == Type.INT_TYPE) {
+                idxs.add(i);
+            }
+        }
+        return idxs;
+    }
+
     /**
      * Create a new TableStats object, that keeps track of statistics on each
      * column of a table
@@ -84,7 +104,82 @@ public class TableStats {
         // You should try to do this reasonably efficiently, but you don't
         // necessarily have to (for example) do everything
         // in a single scan of the table.
-        // some code goes here
+
+        DbFile dbFile = Database.getCatalog().getDatabaseFile(tableid);
+
+        TransactionId tid = new TransactionId();
+        td = dbFile.getTupleDesc();
+
+        List<Integer> intTypeIdxs = getIntTypeIdxs(td);
+        int[] minVal = new int[td.numFields()];
+        int[] maxVal = new int[td.numFields()];
+        if (!intTypeIdxs.isEmpty()) {
+            // Need to do the first phase scan to figure out min and max value
+            DbFileIterator iter = dbFile.iterator(tid);
+            try {
+                iter.open();
+                boolean firstTuple = true;
+                while (iter.hasNext()) {
+                    Tuple t = iter.next();
+                    for (int i = 0; i != intTypeIdxs.size(); i++) {
+                        int idx = intTypeIdxs.get(i);
+                        int value = ((IntField)t.getField(idx)).getValue();
+                        if (firstTuple) {
+                            minVal[idx] = maxVal[idx] = value;
+                        } else {
+                            minVal[idx] = Math.min(minVal[idx], value);
+                            maxVal[idx] = Math.max(maxVal[idx], value);
+                        }
+                    }
+                    firstTuple = false;
+                }
+            } catch (Exception e) {
+                throw new RuntimeException(e.getMessage());
+            } finally {
+                iter.close();
+            }
+        }
+
+        histObjects = new Object[td.numFields()];
+        for (int i = 0; i != td.numFields(); i++) {
+            switch (td.getFieldType(i)) {
+                case INT_TYPE:
+                    histObjects[i] = new IntHistogram(NUM_HIST_BINS, minVal[i], maxVal[i]);
+                    break;
+                case STRING_TYPE:
+                    histObjects[i] = new StringHistogram(NUM_HIST_BINS);
+                    break;
+                default:
+                    throw new IllegalStateException("unknown type: " + td.getFieldType(i));
+            }
+        }
+        DbFileIterator iter = dbFile.iterator(tid);
+        int numTuples = 0;
+        try {
+            iter.open();
+            while (iter.hasNext()) {
+                Tuple t = iter.next();
+                numTuples++;
+                for (int i = 0; i != td.numFields(); i++) {
+                    switch (td.getFieldType(i)) {
+                        case INT_TYPE:
+                            ((IntHistogram)histObjects[i]).addValue(((IntField)t.getField(i)).getValue());
+                            break;
+                        case STRING_TYPE:
+                            ((StringHistogram)histObjects[i]).addValue(((StringField)t.getField(i)).getValue());
+                            break;
+                    }
+                }
+            }
+        } catch (Exception e) {
+            throw new RuntimeException(e.getMessage());
+        } finally {
+            iter.close();
+        }
+
+        this.ioCostPerPage = ioCostPerPage;
+        this.numPages = ((HeapFile)dbFile).numPages();
+        this.numTuples = numTuples;
     }
 
     /**
@@ -100,8 +195,7 @@ public class TableStats {
      * @return The estimated cost of scanning the table.
      */
     public double estimateScanCost() {
-        // some code goes here
-        return 0;
+        return numPages * ioCostPerPage;
     }
 
     /**
@@ -114,8 +208,7 @@ public class TableStats {
      *         selectivityFactor
      */
     public int estimateTableCardinality(double selectivityFactor) {
-        // some code goes here
-        return 0;
+        return (int)(totalTuples() * selectivityFactor);
     }
 
     /**
@@ -147,16 +240,22 @@ public class TableStats {
      *         predicate
      */
     public double estimateSelectivity(int field, Predicate.Op op, Field constant) {
-        // some code goes here
-        return 1.0;
+        switch (td.getFieldType(field)) {
+            case INT_TYPE:
+                IntHistogram intHist = (IntHistogram)histObjects[field];
+                return intHist.estimateSelectivity(op, ((IntField)constant).getValue());
+            case STRING_TYPE:
+                StringHistogram stringHist = (StringHistogram)histObjects[field];
+                return stringHist.estimateSelectivity(op, ((StringField)constant).getValue());
+        }
+        throw new IllegalStateException();
     }
 
     /**
      * return the total number of tuples in this table
      * */
     public int totalTuples() {
-        // some code goes here
-        return 0;
+        return numTuples;
     }
 
 }
