@@ -46,12 +46,8 @@ public class Delete extends Operator {
             count = 0;
             while (child.hasNext()) {
                 Tuple t = child.next();
-                DbFile dbFile =
-                        Database
-                                .getCatalog()
-                                .getDatabaseFile(t.getRecordId().getPageId().getTableId());
                 try {
-                    dbFile.deleteTuple(tid, t);
+                    Database.getBufferPool().deleteTuple(tid, t);
                 } catch (IOException ioe) {
                     throw new DbException(ioe.getMessage());
                 }

@@ -67,27 +67,31 @@ public class HeapFile implements DbFile {
         if (pid.getTableId() != getId()) {
             throw new IllegalArgumentException("pid doesn't not exist in the file");
         }
-        int pageSize = BufferPool.getPageSize();
-        int offset = pid.getPageNumber() * pageSize;
-        if (offset >= f.length()) {
+
+        synchronized (f) {
+            int pageSize = BufferPool.getPageSize();
+            int offset = pid.getPageNumber() * pageSize;
+
+            if (offset >= f.length()) {
+                try {
+                    return new HeapPage((HeapPageId) pid, new byte[pageSize]);
+                } catch (Exception e) {
+                    throw new IllegalArgumentException(e.getMessage());
+                }
+            }
             try {
-                return new HeapPage((HeapPageId) pid, new byte[pageSize]);
+                RandomAccessFile raf = new RandomAccessFile(f, "r");
+                try {
+                    raf.seek(pid.getPageNumber() * pageSize);
+                    byte[] data = new byte[pageSize];
+                    raf.readFully(data);
+                    return new HeapPage((HeapPageId) pid, data);
+                } finally {
+                    raf.close();
+                }
             } catch (Exception e) {
                 throw new IllegalArgumentException(e.getMessage());
             }
-        }
-        try {
-           RandomAccessFile raf = new RandomAccessFile(f, "r");
-           try {
-               raf.seek(pid.getPageNumber() * pageSize);
-               byte[] data = new byte[pageSize];
-               raf.readFully(data);
-               return new HeapPage((HeapPageId) pid, data);
-           } finally {
-               raf.close();
-           }
-        } catch (Exception e) {
-            throw new IllegalArgumentException(e.getMessage());
         }
     }
 
@@ -96,17 +100,20 @@ public class HeapFile implements DbFile {
         if (page.getId().getTableId() != getId()) {
             throw new IllegalArgumentException("pid doesn't not exist in the file");
         }
-        try {
-            RandomAccessFile raf = new RandomAccessFile(f, "rw");
+
+        synchronized (f) {
             try {
-                int pageSize = BufferPool.getPageSize();
-                raf.seek(page.getId().getPageNumber() * pageSize);
-                raf.write(page.getPageData());
-            } finally {
-                raf.close();
+                RandomAccessFile raf = new RandomAccessFile(f, "rw");
+                try {
+                    int pageSize = BufferPool.getPageSize();
+                    raf.seek(page.getId().getPageNumber() * pageSize);
+                    raf.write(page.getPageData());
+                } finally {
+                    raf.close();
+                }
+            } catch (Exception e) {
+                throw new IOException(e);
             }
-        } catch (Exception e) {
-            throw new IOException(e);
         }
     }
 
@@ -124,14 +131,32 @@ public class HeapFile implements DbFile {
         for (int tupno = 0; ;tupno++) {
             HeapPage page =
                     (HeapPage)bp
-                            .getPage(tid, new HeapPageId(getId(), tupno), Permissions.READ_WRITE);
-            if (page.getNumEmptySlots() > 0) {
-                page.insertTuple(t);
-                writePage(page);
-                ArrayList<Page> affectedPages = new ArrayList<>();
-                affectedPages.add(page);
-                return affectedPages;
+                            .getPage(tid, new HeapPageId(getId(), tupno), Permissions.READ_ONLY);
+
+            if (page.getNumEmptySlots() == 0) {
+                bp.releasePage(tid, page.pid);
+                continue;
             }
+
+            page = (HeapPage)bp
+                    .getPage(tid, new HeapPageId(getId(), tupno), Permissions.READ_WRITE);
+
+            synchronized (f) {
+                int len = (tupno + 1) * BufferPool.getPageSize();
+                if (f.length() < len) {
+                    RandomAccessFile raf = new RandomAccessFile(f, "rw");
+                    try {
+                        raf.setLength(len);
+                    } finally {
+                        raf.close();
+                    }
+                }
+            }
+
+            page.insertTuple(t);
+            ArrayList<Page> affectedPages = new ArrayList<>();
+            affectedPages.add(page);
+            return affectedPages;
         }
     }
 
@@ -147,7 +172,6 @@ public class HeapFile implements DbFile {
                 (HeapPage)bp
                         .getPage(tid, recordId.getPageId(), Permissions.READ_WRITE);
         page.deleteTuple(t);
-        writePage(page);
         ArrayList<Page> affectedPages = new ArrayList<>();
         affectedPages.add(page);
         return affectedPages;

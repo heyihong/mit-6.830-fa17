@@ -16,7 +16,7 @@ public class Insert extends Operator {
 
     private OpIterator child;
 
-    private final DbFile dbFile;
+    private final int tableId;
 
     private int count;
 
@@ -41,12 +41,15 @@ public class Insert extends Operator {
             throws DbException {
         this.tid = t;
         this.child = child;
-        this.dbFile = Database.getCatalog().getDatabaseFile(tableId);
-        if (!this.dbFile
+        this.tableId = tableId;
+
+        DbFile dbFile = Database.getCatalog().getDatabaseFile(tableId);
+        if (!dbFile
                 .getTupleDesc()
                 .equals(child.getTupleDesc())) {
             throw new DbException("tuple desc of child differs from table");
         }
+
         this.hasNext = false;
     }
 
@@ -61,7 +64,7 @@ public class Insert extends Operator {
             while (child.hasNext()) {
                 Tuple t = child.next();
                 try {
-                    dbFile.insertTuple(tid, t);
+                    Database.getBufferPool().insertTuple(tid, tableId, t);
                 } catch (IOException ioe) {
                     throw new DbException(ioe.getMessage());
                 }
